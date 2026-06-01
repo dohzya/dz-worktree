@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: install [options]
+
+Interactively install dz-worktree for the current user.
+
+Options:
+  -y, --yes      Accept detected install targets without prompting
+  --dry-run      Print actions without changing files
+  --force        Overwrite existing generated files or differing hooks
+  -h, --help     Show this help
+EOF
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+tool_dir="$(cd "$script_dir/.." && pwd)"
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+zdotdir="${ZDOTDIR:-$HOME}"
+yes=false
+dry_run=false
+force=false
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf 'install: %s\n' "$*" >&2
+  exit 1
+}
+
+run() {
+  if "$dry_run"; then
+    printf '+'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+confirm() {
+  local prompt="$1"
+  "$yes" && return 0
+  "$dry_run" && return 0
+
+  local answer
+  printf '%s [y/N] ' "$prompt"
+  IFS= read -r answer
+  case "$answer" in
+    y|Y|yes|YES|Yes|oui|OUI|Oui) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_file() {
+  local dest="$1"
+  local content="$2"
+  local mode="${3:-}"
+
+  if [[ -e "$dest" ]] && ! printf '%s' "$content" | cmp -s - "$dest"; then
+    "$force" || die "$dest already exists and differs; rerun with --force to overwrite"
+  fi
+
+  if "$dry_run"; then
+    printf '+ write %q\n' "$dest"
+    [[ -z "$mode" ]] || printf '+ chmod %q %q\n' "$mode" "$dest"
+    return
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  printf '%s' "$content" > "$dest"
+  [[ -z "$mode" ]] || chmod "$mode" "$dest"
+}
+
+copy_dir() {
+  local src="$1"
+  local dest="$2"
+
+  [[ -d "$src" ]] || die "missing source directory: $src"
+  if [[ -e "$dest" ]]; then
+    if "$force"; then
+      run rm -rf "$dest"
+    else
+      log "skip existing directory: $dest"
+      return
+    fi
+  fi
+
+  run mkdir -p "$(dirname "$dest")"
+  run cp -R "$src" "$dest"
+}
+
+append_source_line() {
+  local rc="$1"
+  local source_line="$2"
+
+  if [[ -f "$rc" ]] && grep -Fqx "$source_line" "$rc"; then
+    log "shell integration already present in $rc"
+    return
+  fi
+
+  if "$dry_run"; then
+    printf '+ append %q to %q\n' "$source_line" "$rc"
+    return
+  fi
+
+  mkdir -p "$(dirname "$rc")"
+  printf '\n%s\n' "$source_line" >> "$rc"
+}
+
+shell_escape_single() {
+  printf "%s" "$1" | sed "s/'/'\\\\''/g"
+}
+
+replace_init_block() {
+  local src="$1"
+  local block="$2"
+  local block_file
+  block_file="$(mktemp)"
+  printf '%s\n' "$block" > "$block_file"
+
+  awk -v block_file="$block_file" '
+    /^# dz-worktree-init:start$/ {
+      while ((getline line < block_file) > 0) {
+        print line
+      }
+      close(block_file)
+      skipping = 1
+      next
+    }
+    /^# dz-worktree-init:end$/ {
+      skipping = 0
+      next
+    }
+    !skipping { print }
+  ' "$src"
+  rm -f "$block_file"
+}
+
+build_posix_init_function() {
+  {
+    cat <<'EOF'
+git-worktree-init() {
+    local repo="$PWD"
+    local dry_run=false
+    local force=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            --force) force=true; shift ;;
+            -h|--help)
+                printf '%s\n' 'Usage: git-worktree-init [repo] [--dry-run] [--force]'
+                return 0
+                ;;
+            -*)
+                printf 'git-worktree-init: unknown option: %s\n' "$1" >&2
+                return 1
+                ;;
+            *)
+                repo="$1"
+                shift
+                ;;
+        esac
+    done
+
+    [[ -d "$repo" ]] || {
+        printf 'git-worktree-init: repo path does not exist: %s\n' "$repo" >&2
+        return 1
+    }
+    repo="$(cd "$repo" && pwd)" || return 1
+
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || {
+        printf 'git-worktree-init: not a Git repository: %s\n' "$repo" >&2
+        return 1
+    }
+
+    local hook_path hook_dir
+    hook_path="$(git -C "$repo" rev-parse --path-format=absolute --git-path hooks/post-checkout)" || {
+        printf 'git-worktree-init: could not resolve hook path for: %s\n' "$repo" >&2
+        return 1
+    }
+    hook_dir="$(dirname "$hook_path")"
+    if [[ "$hook_dir" == /dev/null ]]; then
+        printf 'git-worktree-init: core.hooksPath disables hooks with /dev/null for: %s\n' "$repo" >&2
+        return 1
+    fi
+
+    __git_wt_write_hook() {
+        local dest="$1"
+        local mode="$2"
+        local tmp
+        tmp="$(mktemp)" || return 1
+        cat > "$tmp"
+
+        if [[ -e "$dest" ]] && ! cmp -s "$tmp" "$dest"; then
+            if ! "$force"; then
+                rm -f "$tmp"
+                printf 'git-worktree-init: %s already exists and differs; rerun with --force to overwrite\n' "$dest" >&2
+                return 1
+            fi
+        fi
+
+        if "$dry_run"; then
+            printf '+ mkdir -p %q\n' "$(dirname "$dest")"
+            printf '+ write %q\n' "$dest"
+            printf '+ chmod %q %q\n' "$mode" "$dest"
+            rm -f "$tmp"
+            return 0
+        fi
+
+        mkdir -p "$(dirname "$dest")"
+        mv "$tmp" "$dest"
+        chmod "$mode" "$dest"
+    }
+
+    __git_wt_write_hook "$hook_dir/post-checkout" 755 <<'DZ_WORKTREE_POST_CHECKOUT'
+EOF
+    cat "$tool_dir/git-hooks/post-checkout"
+    cat <<'EOF'
+DZ_WORKTREE_POST_CHECKOUT
+
+    __git_wt_write_hook "$hook_dir/pre-remove-worktree" 755 <<'DZ_WORKTREE_PRE_REMOVE_WORKTREE'
+EOF
+    cat "$tool_dir/git-hooks/pre-remove-worktree"
+    cat <<'EOF'
+DZ_WORKTREE_PRE_REMOVE_WORKTREE
+
+    printf 'dz-worktree hooks installed in %s\n' "$hook_dir"
+}
+EOF
+  }
+}
+
+build_bash_init_script() {
+  {
+    cat <<'EOF'
+set -euo pipefail
+
+repo="$PWD"
+dry_run=false
+force=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) dry_run=true; shift ;;
+    --force) force=true; shift ;;
+    -h|--help)
+      printf '%s\n' 'Usage: git-worktree-init [repo] [--dry-run] [--force]'
+      exit 0
+      ;;
+    -*)
+      printf 'git-worktree-init: unknown option: %s\n' "$1" >&2
+      exit 1
+      ;;
+    *)
+      repo="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -d "$repo" ]] || {
+  printf 'git-worktree-init: repo path does not exist: %s\n' "$repo" >&2
+  exit 1
+}
+repo="$(cd "$repo" && pwd)"
+
+git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || {
+  printf 'git-worktree-init: not a Git repository: %s\n' "$repo" >&2
+  exit 1
+}
+
+hook_path="$(git -C "$repo" rev-parse --path-format=absolute --git-path hooks/post-checkout)" || {
+  printf 'git-worktree-init: could not resolve hook path for: %s\n' "$repo" >&2
+  exit 1
+}
+hook_dir="$(dirname "$hook_path")"
+if [[ "$hook_dir" == /dev/null ]]; then
+  printf 'git-worktree-init: core.hooksPath disables hooks with /dev/null for: %s\n' "$repo" >&2
+  exit 1
+fi
+
+write_hook() {
+  local dest="$1"
+  local mode="$2"
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp"
+
+  if [[ -e "$dest" ]] && ! cmp -s "$tmp" "$dest"; then
+    if ! "$force"; then
+      rm -f "$tmp"
+      printf 'git-worktree-init: %s already exists and differs; rerun with --force to overwrite\n' "$dest" >&2
+      exit 1
+    fi
+  fi
+
+  if "$dry_run"; then
+    printf '+ mkdir -p %q\n' "$(dirname "$dest")"
+    printf '+ write %q\n' "$dest"
+    printf '+ chmod %q %q\n' "$mode" "$dest"
+    rm -f "$tmp"
+    return
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  mv "$tmp" "$dest"
+  chmod "$mode" "$dest"
+}
+
+write_hook "$hook_dir/post-checkout" 755 <<'DZ_WORKTREE_POST_CHECKOUT'
+EOF
+    cat "$tool_dir/git-hooks/post-checkout"
+    cat <<'EOF'
+DZ_WORKTREE_POST_CHECKOUT
+
+write_hook "$hook_dir/pre-remove-worktree" 755 <<'DZ_WORKTREE_PRE_REMOVE_WORKTREE'
+EOF
+    cat "$tool_dir/git-hooks/pre-remove-worktree"
+    cat <<'EOF'
+DZ_WORKTREE_PRE_REMOVE_WORKTREE
+
+printf 'dz-worktree hooks installed in %s\n' "$hook_dir"
+EOF
+  }
+}
+
+build_fish_init_function() {
+  local script
+  script="$(build_bash_init_script)"
+  cat <<EOF
+function git-worktree-init --description "Install dz-worktree hooks into the current or specified repo"
+    bash -c '$(shell_escape_single "$script")' git-worktree-init \$argv
+end
+EOF
+}
+
+install_template_hooks() {
+  local template_dir="$1"
+  local hook_dir="$template_dir/hooks"
+
+  write_file "$hook_dir/post-checkout" "$(cat "$tool_dir/git-hooks/post-checkout")"$'\n' 755
+  write_file "$hook_dir/pre-remove-worktree" "$(cat "$tool_dir/git-hooks/pre-remove-worktree")"$'\n' 755
+}
+
+install_shells() {
+  local shells=("$@")
+  local shell_name src dest content block source_line
+  for shell_name in "${shells[@]}"; do
+    case "$shell_name" in
+      bash)
+        src="$tool_dir/shell/bash/git-worktree.bash"
+        dest="$config_home/bash/dz-worktree.bash"
+        block="$(build_posix_init_function)"
+        content="$(replace_init_block "$src" "$block")"$'\n'
+        write_file "$dest" "$content"
+        source_line="source \"$dest\""
+        append_source_line "$HOME/.bashrc" "$source_line"
+        ;;
+      zsh)
+        src="$tool_dir/shell/zsh/git-worktree.zsh"
+        dest="$config_home/zsh/dz-worktree.zsh"
+        block="$(build_posix_init_function)"
+        content="$(replace_init_block "$src" "$block")"$'\n'
+        write_file "$dest" "$content"
+        source_line="source \"$dest\""
+        append_source_line "$zdotdir/.zshrc" "$source_line"
+        ;;
+      fish)
+        src="$tool_dir/shell/fish/git-worktree.fish"
+        dest="$config_home/fish/conf.d/dz-worktree.fish"
+        block="$(build_fish_init_function)"
+        content="$(replace_init_block "$src" "$block")"$'\n'
+        write_file "$dest" "$content"
+        ;;
+    esac
+  done
+}
+
+install_skills_to() {
+  local dest_root="$1"
+  local skill_dir skill_name
+
+  for skill_dir in "$tool_dir"/skills/*; do
+    [[ -d "$skill_dir" ]] || continue
+    skill_name="$(basename "$skill_dir")"
+    copy_dir "$skill_dir" "$dest_root/$skill_name"
+  done
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -y|--yes)
+      yes=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --force)
+      force=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+detected_shells=()
+for shell_name in bash zsh fish; do
+  if command -v "$shell_name" >/dev/null 2>&1; then
+    detected_shells+=("$shell_name")
+  fi
+done
+
+if "$dry_run"; then
+  log "dz-worktree dry-run: previewing detected install actions."
+  if [[ ${#detected_shells[@]} -gt 0 ]]; then
+    log "detected shells: ${detected_shells[*]}"
+  else
+    log "detected shells: none"
+  fi
+  log "Claude home: ${CLAUDE_HOME:-$HOME/.claude}"
+  log "Codex home: ${CODEX_HOME:-$HOME/.codex}"
+  template_preview="$(git config --path --get init.templateDir 2>/dev/null || true)"
+  if [[ -n "$template_preview" ]]; then
+    log "Git init.templateDir: $template_preview"
+  else
+    log "Git init.templateDir: not configured"
+  fi
+fi
+
+if [[ ${#detected_shells[@]} -gt 0 ]]; then
+  if confirm "Install shell files for detected shells (${detected_shells[*]})?"; then
+    install_shells "${detected_shells[@]}"
+  elif "$dry_run"; then
+    log "skip shell files: no detected shells"
+  fi
+fi
+
+claude_home="${CLAUDE_HOME:-$HOME/.claude}"
+if [[ -d "$claude_home" || -n "$(command -v claude 2>/dev/null || true)" || "$dry_run" == true ]]; then
+  if confirm "Install Claude skills to $claude_home/skills?"; then
+    install_skills_to "$claude_home/skills"
+  fi
+fi
+
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+if [[ -d "$codex_home" || -n "$(command -v codex 2>/dev/null || true)" || "$dry_run" == true ]]; then
+  if confirm "Install Codex skills to $codex_home/skills?"; then
+    install_skills_to "$codex_home/skills"
+    log "Restart Codex to pick up newly installed skills."
+  fi
+fi
+
+template_dir="$(git config --path --get init.templateDir 2>/dev/null || true)"
+if [[ -n "$template_dir" ]]; then
+  case "$template_dir" in
+    /*) ;;
+    *) template_dir="$(cd "$(dirname "$template_dir")" 2>/dev/null && pwd)/$(basename "$template_dir")" || true ;;
+  esac
+
+  if confirm "Install hooks into Git template dir $template_dir?"; then
+    install_template_hooks "$template_dir"
+  fi
+fi
+
+log "dz-worktree install complete."

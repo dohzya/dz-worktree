@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -e
+
+# Git hook: bootstrap new worktrees from the primary worktree.
+#
+# Install: cp into <bare-repo>/hooks/post-checkout && chmod +x
+#
+# How it works:
+#   - Fires on every `git checkout` and `git worktree add`
+#   - Detects worktree creation via null SHA ($1) + branch flag ($3)
+#   - Copies untracked project files from the primary worktree
+#   - Refreshes terminal tab title on any branch checkout
+#
+# Customize:
+#   - "Files to copy" section: add/remove files to match your project
+#   - "Setup commands" section: add/remove post-bootstrap commands
+
+null_sha="0000000000000000000000000000000000000000"
+
+# $3=0 means file checkout — nothing to do
+[[ "$3" == "1" ]] || exit 0
+
+wt_path="$(pwd)"
+wt_name="$(basename "$wt_path")"
+common_dir="$(git rev-parse --git-common-dir)"
+repo_root="$(cd "$common_dir/.." && pwd)"
+
+# Detect primary worktree (no configuration needed)
+__detect_primary() {
+  if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == false ]]; then
+    git rev-parse --show-toplevel
+    return
+  fi
+  local default_branch
+  default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+  default_branch=${default_branch#origin/}
+  [[ -z "$default_branch" ]] && default_branch=$(git config init.defaultBranch 2>/dev/null)
+  [[ -z "$default_branch" ]] && default_branch=main
+  git worktree list | awk -v b="[$default_branch]" '$NF == b {print $1; exit}'
+}
+primary="$(__detect_primary)"
+
+# ── Worktree creation: bootstrap from primary worktree ────────────
+
+if [[ "$1" == "$null_sha" ]] && [[ -d "$primary" ]] && [[ "$wt_path" != "$primary" ]]; then
+  echo "Bootstrapping worktree '$wt_name' from $(basename "$primary")..."
+
+  # ── Files to copy (adapt to your project) ───────────────────────
+  #
+  # Single files: list in the array, copied if they exist
+  # Directories: use the cp -R block below
+  #
+  for f in AGENTS.md PYTHON.md ARCHI.md Taskfile.yml mise.local.toml; do
+    [[ -f "$primary/$f" ]] && cp "$primary/$f" "$wt_path/$f"
+  done
+
+  # Symlinks
+  [[ -f "$wt_path/AGENTS.md" ]] && ln -fs AGENTS.md "$wt_path/CLAUDE.md"
+  [[ -f "$wt_path/AGENTS.md" ]] && ln -fs AGENTS.md "$wt_path/.cursorrules"
+
+  # .env with branch suffix replacement
+  if [[ -f "$primary/.env" ]]; then
+    cp "$primary/.env" "$wt_path/.env"
+    primary_name="$(basename "$primary")"
+    sed -i '' "1s/ - ${primary_name}\$/ - $wt_name/" "$wt_path/.env"
+  fi
+
+  # Directories
+  [[ -d "$primary/.claude" ]] && cp -R "$primary/.claude" "$wt_path/.claude"
+  [[ -d "$primary/docs" ]]    && cp -R "$primary/docs" "$wt_path/docs"
+
+  # ── Setup commands ──────────────────────────────────────────────
+  cd "$wt_path"
+  mise trust 2>/dev/null || true
+  task -v setup 2>/dev/null || true
+  task vscode:create 2>/dev/null || true
+
+  echo "Worktree '$wt_name' ready."
+fi
+
+# ── Any branch checkout: refresh tab title ────────────────────────
+
+cd "$wt_path"
+task tab:title 2>/dev/null || true

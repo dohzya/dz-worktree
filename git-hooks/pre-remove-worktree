@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -e
+
+# Custom hook — run before removing a worktree.
+# Not triggered automatically by git — call manually or via git-worktree-remove:
+#
+#   git hook run --allow-unknown-hook-name pre-remove-worktree -- <worktree-name>
+#   git worktree remove <worktree-name>
+#
+# Customize:
+#   - "Cleanup commands" section: add project-specific cleanup
+
+wt_name="${1:?usage: git hook run --allow-unknown-hook-name pre-remove-worktree -- <worktree-name>}"
+common_dir="$(git rev-parse --git-common-dir)"
+repo_root="$(cd "$common_dir/.." && pwd)"
+wt_path="$repo_root/$wt_name"
+
+# Detect primary worktree (no configuration needed)
+__detect_primary() {
+  if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == false ]]; then
+    git rev-parse --show-toplevel
+    return
+  fi
+  local default_branch
+  default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)
+  default_branch=${default_branch#origin/}
+  [[ -z "$default_branch" ]] && default_branch=$(git config init.defaultBranch 2>/dev/null)
+  [[ -z "$default_branch" ]] && default_branch=main
+  git worktree list | awk -v b="[$default_branch]" '$NF == b {print $1; exit}'
+}
+primary="$(__detect_primary)"
+
+if [[ ! -d "$wt_path" ]]; then
+  echo "pre-remove-worktree: '$wt_name' already gone or not found" >&2
+  exit 0
+fi
+
+branch="$(git -C "$wt_path" branch --show-current 2>/dev/null || echo "$wt_name")"
+
+echo "Pre-removal cleanup for worktree '$wt_name' (branch: $branch)..."
+
+# ── Cleanup commands (adapt to your project) ──────────────────────
+
+# Worklog: import traces then remove scope (requires wl)
+# wl -C "$primary" import --branch "$branch" --rm --scope-to-tag --tag-name "$branch" 2>/dev/null || true
+
+echo "Worktree '$wt_name' OK to remove."
