@@ -22,8 +22,6 @@ null_sha="0000000000000000000000000000000000000000"
 
 wt_path="$(pwd)"
 wt_name="$(basename "$wt_path")"
-common_dir="$(git rev-parse --git-common-dir)"
-repo_root="$(cd "$common_dir/.." && pwd)"
 
 # Detect primary worktree (no configuration needed)
 __detect_primary() {

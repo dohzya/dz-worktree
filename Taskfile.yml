@@ -1,0 +1,146 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Run the default development checks
+    cmds:
+      - task: validate
+
+  validate:
+    desc: Run all checks required before handoff
+    cmds:
+      - task: format
+      - task: test
+
+  fmt:
+    aliases:
+      - format
+    desc: Run formatting checks
+    cmds:
+      - task: lint
+
+  lint:
+    desc: Run static checks
+    cmds:
+      - task: lint:shell
+      - task: lint:docs
+
+  lint:shell:
+    desc: Check shell syntax and optional shellcheck diagnostics
+    cmds:
+      - bash -n scripts/install
+      - bash -n git-hooks/post-checkout
+      - bash -n git-hooks/pre-remove-worktree
+      - bash -n shell/bash/git-worktree.bash
+      - zsh -n shell/zsh/git-worktree.zsh
+      - fish --no-config -n shell/fish/git-worktree.fish
+      - |
+        if command -v shellcheck >/dev/null 2>&1; then
+          shellcheck \
+            scripts/install \
+            git-hooks/post-checkout \
+            git-hooks/pre-remove-worktree \
+            shell/bash/git-worktree.bash
+        else
+          printf '%s\n' 'shellcheck not found; install dev tools with: mise install'
+        fi
+
+  lint:docs:
+    desc: Check required documentation files exist
+    cmds:
+      - test -s README.md
+      - test -s skills/worktree-install/SKILL.md
+      - test -s skills/worktree-sync/SKILL.md
+
+  test:
+    desc: Run lint and smoke tests
+    cmds:
+      - task: lint
+      - task: test:smoke
+
+  test:smoke:
+    desc: Smoke-test git-worktree-create in each supported shell
+    cmds:
+      - task: test:smoke:bash
+      - task: test:smoke:zsh
+      - task: test:smoke:fish
+
+  test:smoke:bash:
+    desc: Smoke-test git-worktree-create with bash
+    cmds:
+      - |
+        bash -lc '
+        set -euo pipefail
+        script="$PWD/shell/bash/git-worktree.bash"
+        tmp=$(mktemp -d /private/tmp/dzwt-bash.XXXXXX)
+        mkdir "$tmp/repo"
+        cd "$tmp/repo"
+        git init -q
+        git config user.email test@example.com
+        git config user.name Test
+        git config commit.gpgsign false
+        git config tag.gpgsign false
+        git config core.fsmonitor false
+        touch README.md
+        git add README.md
+        git commit -q -m initial
+        source "$script"
+        git-worktree-create --help >/tmp/dzwt-bash-help.txt
+        git-worktree-create -b chore/fix-truc ../fix-truc >/tmp/dzwt-bash-create.txt
+        [[ "$PWD" == "$tmp/fix-truc" ]]
+        [[ "$(git branch --show-current)" == "chore/fix-truc" ]]
+        test -f "$tmp/fix-truc/.git"
+        '
+
+  test:smoke:zsh:
+    desc: Smoke-test git-worktree-create with zsh
+    cmds:
+      - |
+        zsh -f -c '
+        set -euo pipefail
+        script="$PWD/shell/zsh/git-worktree.zsh"
+        tmp=$(mktemp -d /private/tmp/dzwt-zsh.XXXXXX)
+        mkdir "$tmp/repo"
+        cd "$tmp/repo"
+        git init -q
+        git config user.email test@example.com
+        git config user.name Test
+        git config commit.gpgsign false
+        git config tag.gpgsign false
+        git config core.fsmonitor false
+        touch README.md
+        git add README.md
+        git commit -q -m initial
+        source "$script"
+        git-worktree-create --help >/tmp/dzwt-zsh-help.txt
+        git-worktree-create -b chore/fix-truc ../fix-truc >/tmp/dzwt-zsh-create.txt
+        [[ "$PWD" == "$tmp/fix-truc" ]]
+        [[ "$(git branch --show-current)" == "chore/fix-truc" ]]
+        test -f "$tmp/fix-truc/.git"
+        '
+
+  test:smoke:fish:
+    desc: Smoke-test git-worktree-create with fish
+    cmds:
+      - |
+        fish --no-config -c '
+        set script (pwd)/shell/fish/git-worktree.fish
+        set tmp (mktemp -d /private/tmp/dzwt-fish.XXXXXX)
+        mkdir $tmp/repo
+        cd $tmp/repo
+        git init -q
+        git config user.email test@example.com
+        git config user.name Test
+        git config commit.gpgsign false
+        git config tag.gpgsign false
+        git config core.fsmonitor false
+        touch README.md
+        git add README.md
+        git commit -q -m initial
+        source $script
+        git-worktree-create --help >/tmp/dzwt-fish-help.txt; or exit 1
+        git-worktree-create -b chore/fix-truc ../fix-truc >/tmp/dzwt-fish-create.txt; or exit 1
+        test "$PWD" = "$tmp/fix-truc"; or exit 1
+        test (git branch --show-current) = chore/fix-truc; or exit 1
+        test -f "$tmp/fix-truc/.git"; or exit 1
+        '

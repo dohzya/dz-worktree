@@ -83,6 +83,20 @@ git-worktree-init /path/to/project
 
 Restart Codex after installing Codex skills.
 
+## Development
+
+Development tools are declared in `mise.toml`.
+
+```bash
+mise trust
+mise install
+task validate
+```
+
+`task validate` runs formatting checks and tests. `task lint` always checks
+shell syntax. If `shellcheck` is installed, it also
+runs ShellCheck on the bash-compatible scripts.
+
 ### 3. Git hooks
 
 Copy hooks into your bare repo:

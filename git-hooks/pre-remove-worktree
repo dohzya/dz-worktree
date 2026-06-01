@@ -28,6 +28,8 @@ __detect_primary() {
   [[ -z "$default_branch" ]] && default_branch=main
   git worktree list | awk -v b="[$default_branch]" '$NF == b {print $1; exit}'
 }
+# Exposed for project-specific cleanup commands below.
+# shellcheck disable=SC2034
 primary="$(__detect_primary)"
 
 if [[ ! -d "$wt_path" ]]; then

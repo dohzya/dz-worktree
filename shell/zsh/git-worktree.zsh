@@ -193,7 +193,9 @@ git-worktree-create() {
             git worktree add -b "$branch" "$wt_path" "$remote_refs"
         elif [[ $ref_count -gt 1 ]]; then
             echo "Branch '$branch' exists on multiple remotes:" >&2
-            echo "$remote_refs" | sed 's/^/  /' >&2
+            while IFS= read -r ref; do
+                echo "  $ref" >&2
+            done <<< "$remote_refs"
             echo "Specify with: git-worktree-create <branch> and set checkout.defaultRemote" >&2
             return 1
         else
