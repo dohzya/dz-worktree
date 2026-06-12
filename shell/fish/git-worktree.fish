@@ -61,15 +61,26 @@ function __git_wt_resolve --description "Resolve a ref or path to a worktree pat
 end
 
 function __git_wt_primary --description "Path to the primary worktree (works for bare and non-bare repos)"
-    if test (git rev-parse --is-bare-repository 2>/dev/null) = false
-        git rev-parse --show-toplevel
-        return
-    end
-    # Bare repo: find the worktree on the default branch
-    set -l default_branch (git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | string replace 'origin/' '')
+    set -l common_dir (git rev-parse --git-common-dir 2>/dev/null)
+    set -l default_branch (git for-each-ref --format='%(symref:short)' 'refs/remotes/*/HEAD' | awk 'NF { print; exit }')
+    test -n "$default_branch"; and set default_branch (string replace -r '^[^/]*/' '' -- "$default_branch")
+    test -z "$default_branch" -a -n "$common_dir"; and set default_branch (git --git-dir="$common_dir" symbolic-ref --short HEAD 2>/dev/null)
     test -z "$default_branch"; and set default_branch (git config init.defaultBranch 2>/dev/null)
     test -z "$default_branch"; and set default_branch main
-    git worktree list | string match -rg '^(\S+)\s+\S+\s+\['"$default_branch"'\]$' | head -1
+    set -l primary (
+        git worktree list --porcelain |
+            awk -v b="refs/heads/$default_branch" '
+                $1 == "worktree" { path = substr($0, 10) }
+                $1 == "branch" && $2 == b { print path; exit }
+            '
+    )
+    if test -n "$primary"
+        echo "$primary"
+        return
+    end
+    if test (git rev-parse --is-bare-repository 2>/dev/null) = false
+        git rev-parse --show-toplevel
+    end
 end
 
 function git-worktree-switch --description "Switch to a git worktree (by ref, path, or fzf)"

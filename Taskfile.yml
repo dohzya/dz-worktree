@@ -56,7 +56,45 @@ tasks:
     desc: Run lint and smoke tests
     cmds:
       - task: lint
+      - task: test:hooks
       - task: test:smoke
+
+  test:hooks:
+    desc: Smoke-test worktree hooks
+    cmds:
+      - |
+        bash -lc '
+        set -euo pipefail
+        hook="$PWD/git-hooks/post-checkout"
+        tmp=$(mktemp -d /private/tmp/dzwt-hook.XXXXXX)
+        mkdir "$tmp/source"
+        cd "$tmp/source"
+        git init -q -b main
+        git config user.email test@example.com
+        git config user.name Test
+        git config commit.gpgsign false
+        git config tag.gpgsign false
+        git config core.fsmonitor false
+        printf "%s\n" primary > AGENTS.md
+        git add AGENTS.md
+        git commit -q -m initial
+        git clone -q --bare . "$tmp/bare.git"
+        git --git-dir="$tmp/bare.git" update-ref refs/remotes/upstream/main refs/heads/main
+        git --git-dir="$tmp/bare.git" symbolic-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main
+        git --git-dir="$tmp/bare.git" worktree add -q "$tmp/main" main
+        git --git-dir="$tmp/bare.git" symbolic-ref HEAD refs/heads/not-main
+        cp "$hook" "$tmp/bare.git/hooks/post-checkout"
+        chmod +x "$tmp/bare.git/hooks/post-checkout"
+        cd "$tmp/main"
+        git worktree add -q -b feature "$tmp/feature"
+        mv "$tmp/feature/AGENTS.md" "$tmp/feature/AGENTS.md.from-auto-hook"
+        cd "$tmp/feature"
+        "$tmp/bare.git/hooks/post-checkout" \
+          0000000000000000000000000000000000000000 \
+          "$(git rev-parse HEAD)" \
+          1
+        test "$(cat "$tmp/feature/AGENTS.md")" = primary
+        '
 
   test:smoke:
     desc: Smoke-test git-worktree-create in each supported shell

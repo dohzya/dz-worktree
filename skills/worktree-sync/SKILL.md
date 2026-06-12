@@ -28,14 +28,20 @@ common_dir="$(git rev-parse --git-common-dir)"
 repo_root="$(cd "$common_dir/.." && pwd)"
 hook_path="$common_dir/hooks/post-checkout"
 
-if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == false ]]; then
+default_branch="$(git for-each-ref --format='%(symref:short)' 'refs/remotes/*/HEAD' | awk 'NF { print; exit }')"
+default_branch="${default_branch#*/}"
+[[ -z "$default_branch" ]] && default_branch="$(git --git-dir="$common_dir" symbolic-ref --short HEAD 2>/dev/null)"
+[[ -z "$default_branch" ]] && default_branch="$(git config init.defaultBranch 2>/dev/null)"
+[[ -z "$default_branch" ]] && default_branch=main
+primary="$(
+  git worktree list --porcelain |
+    awk -v b="refs/heads/$default_branch" '
+      $1 == "worktree" { path = substr($0, 10) }
+      $1 == "branch" && $2 == b { print path; exit }
+    '
+)"
+if [[ -z "$primary" && "$(git rev-parse --is-bare-repository 2>/dev/null)" == false ]]; then
   primary="$(git rev-parse --show-toplevel)"
-else
-  default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
-  default_branch="${default_branch#origin/}"
-  [[ -z "$default_branch" ]] && default_branch="$(git config init.defaultBranch 2>/dev/null)"
-  [[ -z "$default_branch" ]] && default_branch=main
-  primary="$(git worktree list | awk -v b="[$default_branch]" '$NF == b {print $1; exit}')"
 fi
 ```
 

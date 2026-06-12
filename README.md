@@ -137,8 +137,9 @@ source ~/bin/share/dz-worktree/shell/zsh/git-worktree.zsh
 ```
 
 The primary worktree is detected automatically (no configuration needed):
-non-bare repos use `git rev-parse --show-toplevel`, bare repos find the
-worktree on the default branch (`origin/HEAD` → `init.defaultBranch` → `main`).
+the helpers first find the worktree on the default branch (remote `HEAD` →
+common Git `HEAD` → `init.defaultBranch` → `main`), then fall back to
+`git rev-parse --show-toplevel` for ordinary non-bare repositories.
 
 ### 5. Agent skills (optional)
 
@@ -219,6 +220,6 @@ locally, it creates a tracking branch.
 both directory basenames and checked-out branch names from `git worktree list`.
 Used by `git-worktree-switch` and `git-worktree-remove`.
 
-`__git_wt_primary` finds the primary worktree without configuration: in
-non-bare repos it's the toplevel, in bare repos it's whichever worktree has the
-default branch checked out.
+`__git_wt_primary` finds the primary worktree without configuration: it first
+looks for the worktree on the default branch, then falls back to the current
+repository root for ordinary non-bare repositories.
