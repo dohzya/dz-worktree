@@ -79,6 +79,10 @@ if [[ "$1" == "$null_sha" ]] && [[ -d "$primary" ]] && [[ "$wt_path" != "$primar
   [[ -d "$primary/docs" ]]    && cp -R "$primary/docs" "$wt_path/docs"
 
   # ── Setup commands ──────────────────────────────────────────────
+  # Worklog: add new scope for the worktree branch (requires wl)
+  # branch="$(git -C "$wt_path" branch --show-current 2>/dev/null || echo "$wt_name")"
+  # wl -C "$primary" scopes add --worktree "$branch" 2>/dev/null || true
+
   cd "$wt_path"
   mise trust 2>/dev/null || true
   task -v setup 2>/dev/null || true
