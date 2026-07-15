@@ -48,6 +48,17 @@ if [[ ! -d "$wt_path" ]]; then
   exit 0
 fi
 
+# Safety: never let the cleanup commands below run against the primary
+# worktree itself. If a project's cleanup includes something like a
+# worklog `import --rm` that treats $primary as both source and
+# destination, running it with the primary as the worktree "being
+# removed" imports it into itself and then deletes its own store. Refuse
+# outright rather than rely on wt_name/wt_path never matching $primary.
+if [[ -n "$primary" && "$wt_path" == "$primary" ]]; then
+  echo "pre-remove-worktree: refusing to run against the primary worktree itself." >&2
+  exit 0
+fi
+
 branch="$(git -C "$wt_path" branch --show-current 2>/dev/null || echo "$wt_name")"
 
 echo "Pre-removal cleanup for worktree '$wt_name' (branch: $branch)..."
